@@ -1,0 +1,9 @@
+# Word temp files
+~$*.docx
+*.tmp
+
+# Mac/Linux clutter
+.DS_Store
+
+# Windows clutter
+Thumbs.db
