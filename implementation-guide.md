@@ -293,15 +293,15 @@ sudo apt install -y autoconf automake libtool pkg-config fuse libsnmp-dev uuid g
 lsscsi
 ```
 
-- You should see entries for the SAS card (ATTO VirtualSES) and the tape drive (QUANTUM ULTRIUM-HH9).
+- You should see the SAS card (ATTO VirtualSES) and  tape drive (QUANTUM ULTRIUM-HH9).
 
 > **Note:** The device paths assigned to your SAS card and tape drive depend on your specific hardware configuration and may differ from the paths shown in this guide. To confirm which device your tape drive is mapped to, run:
 > ```
 > ltfs -o device_list
 > ```
-> This will display all detected tape devices and their assigned paths. Use the path shown here in place of `/dev/sg1` in any subsequent commands that reference it. The `/dev/st0` path for the tape device is generally consistent across configurations but is also worth verifying with `lsscsi`.
+> Use the path shown in this list in place of `/dev/sg1` in any subsequent commands that reference it. The `/dev/st0` path for the tape device is generally consistent across configurations but is also worth verifying with `lsscsi`.
 
-- Now check the status of the tape drive itself with this Terminal command:
+- Now check the status of the tape drive. Make sure to adjust “/dev/st0” as needed based on the device number shown in the command from step 10:
 
 ```
 sudo mt -f /dev/st0 status
@@ -359,7 +359,7 @@ Now we're going to create and assign a "udev" permission rule so that our users 
 sudo nano /etc/udev/rules.d/99-tape.rules
 ```
 
-- The rule file now opens directly in Terminal, allowing you to edit it. Enter these lines into the open file within Terminal:
+- The rule file now opens directly in Terminal.  Enter these lines into the open file:
 
 ```
 SUBSYSTEM=="scsi_generic", MODE="0660", GROUP="tape"
@@ -391,7 +391,7 @@ Then remove the "#" character on the line user_allow_other.
 
 Save the file with CTRL+X, Y, ENTER
 
-- We also created and assigned a group for "FUSE" because it was necessary for older versions (FUSE2). FUSE3 handles permissions differently now, but we did this to prevent issues with legacy or compatibility issues:
+- We also created a group for “FUSE” because it was necessary for older versions (FUSE2).  FUSE3 handles permissions differently now, but this prevents legacy issues:
 
 ```
 sudo addgroup fuse
@@ -402,7 +402,7 @@ sudo usermod -aG fuse $USER
 
 ### 4.6 – Create the Mount Point
 
-- Finally, use these Terminal commands to 1. Create the place where our tape will be mounted, 2. Ensure our user can mount the tape without sudo, and 3. Set permissions so that our user has full control over that mount point:
+- Finally, use these Terminal commands to 1) Create the place where our tape will be mounted, 2) Ensure our user can mount the tape without sudo, and 3) Set permissions so that our user has full control over that mount point:
 
 ```
 mkdir -p /media/tape
@@ -439,6 +439,7 @@ chmod +x ~/tape-mount.sh
 
 case "$1" in
   mount)
+    # Replace /dev/sg1 with your tape dev path (ltfs -o device_list)
     ltfs -o devname=/dev/sg1,allow_other /media/tape
     echo "Tape mounted at /media/tape"
     ;;
@@ -497,4 +498,193 @@ esac
 
 ## 5 – Setup Media Inventory Workflow
 
-*See included `tape-inventory.py` script and accompanying documentation.*
+Once all read/write operations on a tape and checksums are done, we use a python script (.py) to automatically generate a media inventory.  This script can inventory a mounted tape or a connected external hard drive as needed.
+
+Specifically, the script performs these steps:
+1. Asks the user whether to inventory a tape (1) or an external hard drive (2).
+2.	If tape is chosen, the script confirms that it is mounted.  If external hard drive is chosen, it will show all connected external hard drives and ask which to inventory.
+3.	Creates an output folder at “~/Media_Inventories/” if it doesn’t already exist.
+4.	Creates a tab-separated (TSV) media inventory file with the file name of:  
+   - “(Drive Name) (Date in ISO format – e.g., YYYY-MM-DD)”
+5.	Fills the media inventory file the following information for each file in the drive, skipping MD5 files and directory entries:
+   - Column 1 – SizeinBytes:  Shows the total size of the file in bytes.  For example, a 20 MB file would be listed as 20,971,520 bytes.
+   - Column 2 – FullFilePath:  Shows the file name and relative path, including the name of the drive.  For example, “/media/tape/folder1/file.mov” would become “DriveName/folder1/file.mov”.
+
+Start by running this command in Terminal to create the script.  Feel free to change the name from “tape-mount” to whatever you want:
+
+```
+nano ~/media-inventory.sh
+```
+
+Now paste in the script included below and save it with CTRL+X, Y, then ENTER.  Remember to make it executable after saving this Terminal command.  If you changed the name of the script, change it here too
+
+```
+chmod +x ~/media-inventory.sh
+```
+Once added, you can use this script with the following command:
+
+```
+python3 ~/tape-inventory.py
+```
+
+```
+#!/usr/bin/env python3
+
+import os
+import sys
+import datetime
+import subprocess
+Import getpass
+
+MOUNT_POINT = "/media/tape"
+EXTERNAL_MOUNT_BASE = f"/media/{getpass.getuser()}"
+OUTPUT_DIR = os.path.expanduser("~/Media_Inventories")
+
+def get_volume_name():
+  try:
+    result = subprocess.run(
+      ["attr", "-g", "ltfs.volumeName", MOUNT_POINT],
+      capture_output=True, text=True
+    )
+    for line in result.stdout.splitlines():
+      line = line.strip()
+      if line and not line.startswith("Attribute"):
+        return line
+  except Exception:
+    pass
+  return None
+
+def check_mounted():
+  with open("/proc/mounts", "r") as f:
+    for line in f:
+      if MOUNT_POINT in line:
+        return True
+  return False
+
+def get_external_drives():
+  drives = []
+  if os.path.exists(EXTERNAL_MOUNT_BASE):
+    for entry in os.listdir(EXTERNAL_MOUNT_BASE):
+      full_path = os.path.join(EXTERNAL_MOUNT_BASE, entry)
+      if os.path.ismount(full_path):
+        drives.append(entry)
+  return drives
+
+def generate_inventory(source_path, volume_name):
+  date_str = datetime.date.today().isoformat()
+  filename = f"{volume_name}_Inv_{date_str}.tsv"
+  output_path = os.path.join(OUTPUT_DIR, filename)
+  os.makedirs(OUTPUT_DIR, exist_ok=True)
+  file_count = 0
+  with open(output_path, "w") as tsv:
+    tsv.write("SizeinBytes\tFullFilePath\n")
+    for dirpath, dirnames, filenames in os.walk(source_path):
+      for fname in filenames:
+        if fname.endswith(".md5"):
+          continue
+        full_path = os.path.join(dirpath, fname)
+        try:
+          size = os.path.getsize(full_path)
+          relative_path = full_path[len(source_path):]
+          inventory_path = volume_name + relative_path
+          tsv.write(f"{size}\t{inventory_path}\n")
+          file_count += 1
+        except OSError:
+          print(f"Warning: Could not read {full_path}, skipping.")
+  print(f"Inventory complete. {file_count} files catalogued.")
+  print(f"Saved to: {output_path}")
+
+def main():
+  print("What would you like to inventory?")
+  print("  1. Mounted tape drive")
+  print("  2. External hard drive")
+  choice = input("Enter 1 or 2: ").strip()
+  if choice == "1":
+    if not check_mounted():
+      print("Error: No tape is currently mounted at " + MOUNT_POINT)
+      print("Please run ~/tape-mount.sh mount first.")
+      sys.exit(1)
+    volume_name = get_volume_name()
+    if not volume_name:
+      print("Error: Could not read volume name from tape.")
+      sys.exit(1)
+    print(f"Tape volume name: {volume_name}")
+    generate_inventory(MOUNT_POINT, volume_name)
+  elif choice == "2":
+    drives = get_external_drives()
+    if not drives:
+      print("Error: No external drives found.")
+      print("Please plug in the drive and try again.")
+      sys.exit(1)
+    print("Available external drives:")
+    for i, drive in enumerate(drives, 1):
+      print(f"  {i}. {drive}")
+    drive_choice = input("Enter the number of the drive to inventory: ").strip()
+    try:
+      drive_index = int(drive_choice) - 1
+      if drive_index < 0 or drive_index >= len(drives):
+        raise ValueError
+    except ValueError:
+      print("Error: Invalid selection.")
+      sys.exit(1)
+    selected_drive = drives[drive_index]
+    source_path = os.path.join(EXTERNAL_MOUNT_BASE, selected_drive)
+    generate_inventory(source_path, selected_drive)
+  else:
+    print("Error: Invalid selection. Please enter 1 or 2.")
+    sys.exit(1)
+
+if __name__ == "__main__":
+  main()
+```
+
+## 6 - Verification and Testing
+
+Run these tests in Terminal to verify the system is working correctly.
+
+### Verify Drive is Visible
+
+```
+lsscsi
+```
+You should see entries for the ATTO HBA (ATTO VirtualSES) and the tape drive (QUANTUM ULTRIUM-HH9).
+
+### Format a New Tape
+
+1. Start by inserting a blank tape.
+2. Wait for the green light to settle, then run this command:
+```
+mkltfs -d /dev/sg1 -f -n "[VolumeName]"
+```
+
+### Test a Mount and write
+
+3.	Use the mount/unmount script script you created above to mount the formatted drive.
+```
+~/tape-mount.sh mount
+```
+4.	Now create a test file to write.
+```
+echo 'test' > /media/tape/test.txt
+```
+5.	Then check that it was written properly.  You should see the word “test”.
+```
+cat /media/tape/test.txt
+```
+
+### Test Media Inventory
+
+6.	Use this command to run the media inventory python script we created earlier.  Feel free to add more files to the tape prior to running this script for more extensive testing.
+```
+python3 ~/tape-inventory.py
+```
+7.	Type “1” for tape and hit ENTER to confirm.
+8.	Once finished, check for an inventory file in “~/Media_Inventories/” and verify that the file name and contents are accurate.
+9.	As desired, plug in an external hard drive and use the “2” option to test it as well.
+
+### Unmount a Drive
+10.	When finished testing, unmount the drive using your mount/unmount script and check for any issues or errors.
+```
+~/tape-mount.sh unmount
+```
+

@@ -1,6 +1,7 @@
 #!/bin/bash
 case "$1" in
   mount)
+	# Replace /dev/sg1 with your tape dev path (ltfs -o device_list)
     ltfs -o devname=/dev/sg1,allow_other /media/tape
     echo "Tape mounted at /media/tape"
     ;;
