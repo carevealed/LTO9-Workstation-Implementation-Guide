@@ -9,6 +9,7 @@ Windows lacks native LTO tape driver support and the existing drivers have known
 ## What's Included
 
 - **[Implementation Guide](implementation-guide.md)** — Step-by-step setup instructions covering both standalone Debian and dual boot (Windows + Debian) configurations.
+- **[Workflow Quick Start](workflow-quickstart.md)** - Basic workflow guide with commands, tips, and instructions for using the workstation once implemented.
 - **[tape-mount.sh](tape-mount.sh)** — Convenience script for mounting, unmounting, and ejecting tapes.
 - **[tape-inventory.py](tape-inventory.py)** — Python script for generating TSV file inventories of tape or external drive contents.
 - **LTO-9 Workstation Implementation Guide.docx** — Word version of the implementation guide.
